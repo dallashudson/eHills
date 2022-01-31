@@ -1,0 +1,20 @@
+// Background color of the whole context menu
+.choice-box .context-menu { -fx-background-color: azure; }
+
+// Focused item background color in the list
+.choice-box .menu-item:focused { -fx-background-color: blue; }
+
+// Text color of non-focused items in the list
+.choice-box .menu-item > .label { -fx-text-fill: blue; }
+
+// Text color of focused item in the list
+.choice-box .menu-item:focused > .label { -fx-text-fill: azure; }
+
+// Background color of the control itself
+.choice-box {
+  -fx-background-color: azure;
+  -fx-mark-color: blue; // arrow color
+}
+
+// Selected item text color on the control itself
+.choice-box > .label { -fx-text-fill: blue; }

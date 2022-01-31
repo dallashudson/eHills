@@ -1,0 +1,23 @@
+.root {
+    -tab-text-color: -fx-text-base-color ;
+}
+
+.tab {
+	-fx-background-color: -fx-background;
+	-fx-font: 10px "Verdana";
+	-fx-font-weight: bold;
+	-fx-alignment: CENTER;
+}
+
+.tab-label {
+    -fx-text-fill: -tab-text-color ;
+}
+
+.tab:hover{
+    -fx-background: darkgrey;
+}
+
+.tab:selected{
+    -fx-background: skyblue;
+}
+

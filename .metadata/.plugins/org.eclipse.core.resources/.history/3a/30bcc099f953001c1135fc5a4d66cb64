@@ -1,0 +1,228 @@
+package FinalServer;
+
+import java.util.Queue;
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.math.BigDecimal;
+import java.util.TimerTask;
+import java.net.Socket;
+import java.util.LinkedList;
+import java.util.ArrayList;
+import java.math.RoundingMode;
+import java.util.Timer;
+
+import java.util.Observable;
+
+public class Server extends Observable {
+
+	private ArrayList<ClientHandler> clientList = new ArrayList<ClientHandler>();
+	private Object availableLock = new Object();
+	private ArrayList<AuctionItem> availableAuctions = new ArrayList<AuctionItem>();
+	private Integer clientNum = 0;
+	private Queue<AuctionItem> unavailableAuctionQueue = new LinkedList<AuctionItem>();
+	final static BigDecimal sec = BigDecimal.valueOf(1.0).divide(BigDecimal.valueOf(60.0), 100, RoundingMode.HALF_UP);
+	final static BigDecimal decimalZero = BigDecimal.ZERO;
+	private ArrayList<AuctionItem> auctions = new ArrayList<AuctionItem>();
+
+	public static void main(String[] args) {
+		new Server().runServer();
+	}
+
+	private void runServer() {
+		try {
+			DatabaseConnection parser = new DatabaseConnection();
+			parser.connect();
+			auctions.addAll(parser.collectAuctionItems());
+			availableAuctions.addAll(auctions);
+
+			availTimer();
+			unavailTimer();
+			networkInitialization();
+
+		} catch (Exception exception) {
+			exception.printStackTrace();
+		}
+	}
+
+	private void networkInitialization() throws Exception {
+		@SuppressWarnings("resource")
+		ServerSocket serverSocket = new ServerSocket(4242);
+		while (true) {
+			Socket clientSocket = serverSocket.accept();
+			System.out.println("Client #" + clientNum + " will connect at " + clientSocket);
+			ClientHandler handler = new ClientHandler(this, clientSocket, clientNum);
+
+			this.addObserver(handler);
+
+			clientNum = clientNum + 1;
+			clientList.add(handler);
+
+			Thread clientRunner = new Thread(handler);
+			clientRunner.start();
+		}
+	}
+
+	protected synchronized void processRequest(String inputCommand) {
+		String output = "";
+		if (inputCommand.contains("|")) {
+			String[] commandString = inputCommand.trim().split("\\|");
+			switch (commandString[0]) {
+				case "changeItemBid":
+					for (AuctionItem i : availableAuctions) {
+						if (i.itemName.contentEquals(commandString[1])) {
+							updateBid(commandString, i);
+							break;
+						}
+					}
+					break;
+				default:
+			}
+		} else {
+
+			String[] commandString = inputCommand.trim().split(" ");
+
+			switch (commandString[0]) {
+				case "disconnectClient":
+					disconnectClientFromServer(commandString);
+					break;
+				case "setUpAuctionItems":
+					setupItems(output, commandString);
+					break;
+				default:
+			}
+		}
+
+	}
+
+	private void setupItems(String output, String[] commandString) {
+		ClientHandler handler = null;
+		int clientID = Integer.parseInt(commandString[1]);
+
+		for (ClientHandler cli : clientList) {
+			if (cli.clientNum == clientID) {
+				handler = cli;
+			}
+		}
+
+		String auctionTitle = "";
+
+		for (AuctionItem i : auctions) {
+			auctionTitle += i.itemName + "|" + i.itemDescription + "|" + String.valueOf(i.minimumPrice) + "|" +
+					String.valueOf(i.currBidder) + "|" + String.valueOf(i.buyNow) + "|" +
+					i.nameHighestBidder + "|" + String.valueOf(i.timeLimit) + "|" + i.itemPrintMessage + "|";
+		}
+
+		output += "setUpAuctionItemsNotification|" + auctionTitle;
+		handler.sendToClient(output);
+	}
+
+	private void disconnectClientFromServer(String[] commandString) {
+		ClientHandler disc = null;
+		int num = Integer.parseInt(commandString[1]);
+		for (ClientHandler o : clientList) {
+
+			if (o.clientNum == num) {
+				disc = o;
+				break;
+			}
+		}
+		try {
+			disc.apiReturn.flush();
+			disc.toClient.close();
+			disc.fromClient.close();
+			disc.cliSock.close();
+
+		} catch (IOException ex) {
+			System.out.println("ERROR disconnecting Client from the Server.");
+		}
+		this.deleteObserver(disc);
+		clientNum = clientNum - 1;
+		clientList.remove(disc);
+	}
+
+	private void updateBid(String[] commandString, AuctionItem i) {
+
+		i.nameHighestBidder = i.nameHighestBidder + commandString[3];
+		i.bidCurrent = Double.parseDouble(commandString[2]);
+		this.setChanged();
+		this.notifyObservers(
+				"changeItemBidNotification|" + i.itemName + "|" + i.currBidder + "|" + i.nameHighestBidder);
+	}
+
+	private void availTimer() {
+		Timer countdown = new Timer();
+		Server serv = this;
+		countdown.scheduleAtFixedRate(new TimerTask() {
+			public void run() {
+				synchronized (availableLock) {
+					for (AuctionItem x : availableAuctions) {
+						runItemAuction(serv, x);
+					}
+				}
+			}
+
+			private void runItemAuction(Server serv, AuctionItem item) {
+
+				if (item.timeLimit.compareTo(sec) != 1) {
+					item.timeLimit = decimalZero;
+					unavailableAuctionQueue.add(item);
+					serv.setChanged();
+					serv.notifyObservers("changedTimeNotification|" + item.itemName + "|" + item.timer);
+				} else {
+					item.timeLimit = item.timeLimit.subtract(sec);
+					serv.setChanged();
+					serv.notifyObservers("changedTimeNotification|" + item.itemName + "|" + item.timeLimit);
+
+				}
+			}
+		}, 0, 1000);
+	}
+
+	private void unavailTimer() {
+
+		Timer countdown = new Timer();
+		Server serv = this;
+		countdown.scheduleAtFixedRate(new TimerTask() {
+			public void run() {
+				synchronized (availableLock) {
+					for (AuctionItem i : availableAuctions) {
+						unavailableAuction(serv, i);
+					}
+					while (!unavailableAuctionQueue.isEmpty()) {
+						availableAuctions.remove(unavailableAuctionQueue.remove());
+					}
+				}
+			}
+
+			private void unavailableAuction(Server obj, AuctionItem i) {
+				if (i.timeLimit.compareTo(decimalZero) == 0) {
+					if (!(i.nameHighestBidder.contentEquals("none"))) {
+						i.itemPrintMessage = (i.highestBidder + " purchased the item - " + i.itemName
+								+ " - for the highest bidded price of $" + i.currBidder + ".");
+
+					} else {
+						i.itemPrintMessage = "Auction for this item has ended. The item has been marked unsold.";
+					}
+					obj.setChanged();
+
+					obj.notifyObservers("purchasedItemNotification|" + i.itemName + "|" + i.itemPrintMessage);
+
+				} else if (i.currBidder >= i.buyNow) {
+
+					i.itemPrintMessage = (i.itemName + " was sold to " + i.nameHighestBidder + " for the price of $"
+							+ i.currBidder + ".");
+					obj.setChanged();
+
+					obj.notifyObservers("purchasedItemNotification|" + i.itemName + "|" + i.itemPrintMessage);
+
+					i.timeLimit = decimalZero;
+					unavailableAuctionQueue.add(i);
+					obj.setChanged();
+
+					obj.notifyObservers("changedTimeNotification|" + i.itemName + "|" + i.timeLimit);
+				}
+			}
+		}, 0, 50);
+	}
+
+}
